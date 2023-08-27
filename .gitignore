@@ -1,4 +1,6 @@
 bindings*
 pyroduct-server
-.idea
+.idea*
+*.iml
+
 
