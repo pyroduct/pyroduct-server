@@ -3,17 +3,20 @@ package state
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 )
 
 type TimeSlice struct {
 	Count uint32
+	Start time.Time
+	End   time.Time
 	Next  *TimeSlice
 }
 
 type UsagePeriod struct {
-	first           *TimeSlice
-	Last            *TimeSlice
+	earliest        *TimeSlice
+	latest          *TimeSlice
 	Name            string
 	TimeUnit        string
 	timeUnitEnum    TimeUnit
@@ -22,8 +25,148 @@ type UsagePeriod struct {
 	granularityEnum TimeUnit
 	noCullOnAccess  bool
 	ClockAlign      bool
-	count           int64
+	Limit           uint64
+	resetClockTime  time.Time
+	count           uint64
+	timeFunc        func() time.Time
+	duration        time.Duration
 }
+
+func (up *UsagePeriod) Allowed() (bool, int) {
+
+	now := up.timeFunc()
+
+	up.Trim(now)
+
+	if up.latest == nil {
+
+		up.latest = up.buildSlice(now)
+		up.earliest = up.latest
+
+		if up.ClockAlign {
+			up.resetClockTime = up.earliest.Start.Add(up.duration)
+		}
+
+	} else {
+		up.updateLatest(now)
+	}
+
+	if up.count >= up.Limit {
+		return false, 0
+	} else {
+		up.latest.Count += 1
+		up.count += 1
+
+		return true, 0
+	}
+
+}
+
+func (up *UsagePeriod) updateLatest(now time.Time) {
+
+	if now.After(up.latest.End) {
+		ns := up.buildSlice(now)
+
+		up.latest.Next = ns
+		up.latest = ns
+	}
+
+}
+
+func (up *UsagePeriod) buildSlice(now time.Time) *TimeSlice {
+	ts := new(TimeSlice)
+
+	up.earliest = ts
+	up.latest = ts
+
+	ts.Start, ts.End = up.sliceStartEnd(now)
+
+	return ts
+}
+
+func (up *UsagePeriod) Trim(now time.Time) {
+
+	if up.earliest == nil {
+		return
+	}
+
+	if up.ClockAlign && !up.resetClockTime.IsZero() && now.After(up.resetClockTime) {
+		up.Reset()
+		return
+	}
+
+}
+
+func (up *UsagePeriod) Reset() {
+	up.earliest = nil
+	up.latest = nil
+	up.count = 0
+
+	return
+}
+
+func (up *UsagePeriod) sliceStartEnd(now time.Time) (time.Time, time.Time) {
+
+	if up.ClockAlign {
+		s, e := up.alignSlice(now)
+
+		return s, e
+	}
+
+	return now, now
+}
+
+func (up *UsagePeriod) TotalSlices() int {
+	if up.earliest == nil {
+		return 0
+	}
+
+	return up.sliceCount(up.earliest, 0)
+}
+
+func (up *UsagePeriod) sliceCount(ts *TimeSlice, count int) int {
+
+	count += 1
+
+	if ts.Next == nil {
+		return count
+	} else {
+		return up.sliceCount(ts.Next, count)
+	}
+
+}
+
+func (up *UsagePeriod) alignSlice(t time.Time) (time.Time, time.Time) {
+
+	//startTemplate := "2006-01-02T15:04:05.999999999Z"
+	startTemplate := "%d-%02d-%02dT%02d:%02d:%02d.000000000Z"
+
+	day, month, year := t.Day(), t.Month(), t.Year()
+	var hour, minutes, seconds int
+
+	tu := up.timeUnitEnum
+
+	if tu < DAY {
+		hour = t.Hour()
+	}
+
+	if tu < HOUR {
+		minutes = t.Minute()
+	}
+
+	if tu < MINUTE {
+		seconds = t.Second()
+	}
+
+	ts := fmt.Sprintf(startTemplate, year, month, day, hour, minutes, seconds)
+	start, _ := time.Parse(time.RFC3339Nano, ts)
+
+	end := start.Add(unitToDuration(up.granularityEnum, time.Duration(-1)))
+
+	return start, end
+}
+
+//type timeFunc func() time.Time
 
 type TimeUnit int
 
@@ -41,6 +184,21 @@ const (
 	DAY_LABEL    = "DAY"
 )
 
+func unitToDuration(unit TimeUnit, offset time.Duration) time.Duration {
+	switch unit {
+	case DAY:
+		return (time.Hour * 24) + offset
+	case SECOND:
+		return time.Second + offset
+	case MINUTE:
+		return time.Minute + offset
+	case HOUR:
+		return time.Hour + offset
+	}
+
+	return 0
+}
+
 func labelToUnit(label string) (TimeUnit, error) {
 	switch label {
 	case DAY_LABEL:
@@ -53,7 +211,7 @@ func labelToUnit(label string) (TimeUnit, error) {
 		return HOUR, nil
 	}
 
-	return -1, fmt.Errorf("No such supported TimeUnit \"%s\"", label)
+	return -1, fmt.Errorf("no such supported TimeUnit \"%s\"", label)
 }
 
 func unitToLabel(unit TimeUnit) (string, error) {
@@ -71,7 +229,7 @@ func unitToLabel(unit TimeUnit) (string, error) {
 	return "", fmt.Errorf("TimeUnit of value %d cannot be mapped to a label", unit)
 }
 
-func parseAndValidateUsagePeriod(up *UsagePeriod) error {
+func (up *UsagePeriod) Initialise() error {
 
 	var err error
 
@@ -97,6 +255,9 @@ func parseAndValidateUsagePeriod(up *UsagePeriod) error {
 		if up.granularityEnum, err = labelToUnit(up.Granularity); err != nil {
 			return err
 		}
+	} else {
+		up.Granularity = up.TimeUnit
+		up.granularityEnum = up.timeUnitEnum
 	}
 
 	if up.granularityEnum > up.timeUnitEnum {
@@ -107,6 +268,12 @@ func parseAndValidateUsagePeriod(up *UsagePeriod) error {
 		return fmt.Errorf("UnitMultiple must be unset or >= 1")
 	} else if up.UnitMultiple == 0 {
 		up.UnitMultiple = 1
+	}
+
+	up.duration = unitToDuration(up.timeUnitEnum, 0) * time.Duration(up.UnitMultiple)
+
+	if up.Limit <= 0 {
+		return fmt.Errorf("value for field Limit %d must be greater than zero", up.Limit)
 	}
 
 	return nil
