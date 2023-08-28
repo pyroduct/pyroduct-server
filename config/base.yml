@@ -1,3 +1,5 @@
 FrameworkLogger:
-  GlobalLogLevel: "FATAL"
+  GlobalLogLevel: "INFO"
+ApplicationLogger:
+  GlobalLogLevel: "ERROR"
 

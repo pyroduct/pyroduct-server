@@ -1,4 +1,6 @@
 packages:
-  # List of package names (e.g granitic.ws) referenced by components in this file.
+  - "github.com/pyroduct/pyroduct-server/manager"
 components:
-  # Definition of components you want to be managed by Granitic
+  pyroductManager:
+    type: "manager.PyroductManager"
+    Config: "$ruleSets"

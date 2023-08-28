@@ -1,0 +1,7 @@
+ruleSets:
+  calendarDayLimited:
+    timePeriod:
+      mode: "CLOCK_ALIGNED"
+      unit: "DAY"
+      requestLimit: 500
+      quantity: 1
