@@ -161,6 +161,45 @@ func TestUnitInvalidTimeUnits(t *testing.T) {
 	assert.NotNil(t, up.Initialise())
 }
 
+func TestDayClockAlignedHourGranularity(t *testing.T) {
+	up := new(UsagePeriod)
+
+	up.Name = "test-period"
+	up.TimeUnit = DAY_LABEL
+	up.Granularity = HOUR_LABEL
+	up.ClockAlign = true
+	up.Limit = 5
+
+	mts := new(mockTimeSource)
+	up.timeFunc = mts.Time
+	mts.times = []string{
+		"2006-01-02T15:04:05.999999999Z",
+		"2006-01-02T16:05:05.999999999Z",
+		"2006-01-02T17:06:05.999999999Z",
+		"2006-01-02T18:07:05.999999999Z",
+		"2006-01-02T19:08:05.999999999Z",
+		"2006-01-02T20:09:05.999999999Z",
+		"2006-01-03T15:09:05.999999999Z",
+	}
+	_ = up.Initialise()
+
+	for i := 0; i < 5; i++ {
+		okay, _ := up.Allowed()
+		assert.True(t, okay)
+		assert.Equal(t, i+1, up.TotalSlices())
+	}
+
+	//Sixth request on same day
+	okay, _ := up.Allowed()
+	assert.False(t, okay)
+
+	//First request on following day
+	okay, _ = up.Allowed()
+	assert.True(t, okay)
+	assert.Equal(t, 1, up.TotalSlices())
+
+}
+
 func TestDayAlignedPeriod(t *testing.T) {
 
 	up := new(UsagePeriod)

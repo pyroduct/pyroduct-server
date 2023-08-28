@@ -44,7 +44,7 @@ func (up *UsagePeriod) Allowed() (bool, int) {
 		up.earliest = up.latest
 
 		if up.ClockAlign {
-			up.resetClockTime = up.earliest.Start.Add(up.duration)
+			_, up.resetClockTime = up.calculateAlignedStartEndTimes(now, up.timeUnitEnum)
 		}
 
 	} else {
@@ -76,9 +76,6 @@ func (up *UsagePeriod) updateLatest(now time.Time) {
 func (up *UsagePeriod) buildSlice(now time.Time) *TimeSlice {
 	ts := new(TimeSlice)
 
-	up.earliest = ts
-	up.latest = ts
-
 	ts.Start, ts.End = up.sliceStartEnd(now)
 
 	return ts
@@ -108,7 +105,7 @@ func (up *UsagePeriod) Reset() {
 func (up *UsagePeriod) sliceStartEnd(now time.Time) (time.Time, time.Time) {
 
 	if up.ClockAlign {
-		s, e := up.alignSlice(now)
+		s, e := up.calculateAlignedStartEndTimes(now, up.granularityEnum)
 
 		return s, e
 	}
@@ -136,15 +133,13 @@ func (up *UsagePeriod) sliceCount(ts *TimeSlice, count int) int {
 
 }
 
-func (up *UsagePeriod) alignSlice(t time.Time) (time.Time, time.Time) {
+func (up *UsagePeriod) calculateAlignedStartEndTimes(t time.Time, tu TimeUnit) (time.Time, time.Time) {
 
 	//startTemplate := "2006-01-02T15:04:05.999999999Z"
 	startTemplate := "%d-%02d-%02dT%02d:%02d:%02d.000000000Z"
 
 	day, month, year := t.Day(), t.Month(), t.Year()
 	var hour, minutes, seconds int
-
-	tu := up.timeUnitEnum
 
 	if tu < DAY {
 		hour = t.Hour()
@@ -161,7 +156,7 @@ func (up *UsagePeriod) alignSlice(t time.Time) (time.Time, time.Time) {
 	ts := fmt.Sprintf(startTemplate, year, month, day, hour, minutes, seconds)
 	start, _ := time.Parse(time.RFC3339Nano, ts)
 
-	end := start.Add(unitToDuration(up.granularityEnum, time.Duration(-1)))
+	end := start.Add(unitToDuration(tu, time.Duration(-1)))
 
 	return start, end
 }
